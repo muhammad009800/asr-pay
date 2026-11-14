@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ASR Pay</title>
+<style>
+  :root { --bg:#0b1020; --card:#131a33; --line:#24305c; --text:#e8ecff; --muted:#93a0d1; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --accent:#6d5efc; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px;
+         background: radial-gradient(1200px 600px at 50% -10%, #23306b 0%, var(--bg) 60%); color:var(--text);
+         font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif; }
+  .card { width:100%; max-width:460px; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px; box-shadow:0 20px 60px rgba(0,0,0,.45); }
+  h1 { margin:0 0 4px; font-size:20px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:16px; }
+  .amount { text-align:center; padding:16px; border-radius:14px; background:#0e1430; border:1px solid var(--line); margin-bottom:14px; }
+  .amount b { display:block; font-size:30px; letter-spacing:.5px; direction:ltr; }
+  .amount span { color:var(--muted); font-size:13px; }
+  .row { margin:10px 0; }
+  .label { color:var(--muted); font-size:12px; margin-bottom:4px; }
+  .mono { direction:ltr; text-align:left; font-family: ui-monospace, Consolas, monospace; font-size:12.5px; word-break:break-all;
+          background:#0e1430; border:1px solid var(--line); border-radius:10px; padding:9px 10px; display:flex; gap:8px; align-items:center; }
+  .mono code { flex:1; }
+  .copy { cursor:pointer; border:0; background:#232c57; color:var(--text); border-radius:8px; padding:4px 9px; font-size:12px; }
+  button.main, a.main { display:block; width:100%; text-align:center; text-decoration:none; border:0; cursor:pointer; margin-top:12px;
+          padding:14px; border-radius:12px; font-size:16px; font-weight:700; color:#fff; background:linear-gradient(135deg, var(--accent), #9a5cff); }
+  button.main:disabled { opacity:.5; cursor:not-allowed; }
+  a.alt, button.alt { display:block; width:100%; text-align:center; text-decoration:none; margin-top:10px; padding:12px; border-radius:12px;
+          border:1px solid var(--line); background:#0e1430; color:var(--text); font-weight:600; cursor:pointer; font-size:15px; }
+  .msg { margin-top:12px; padding:11px 12px; border-radius:10px; font-size:14px; display:none; }
+  .msg.show { display:block; }
+  .msg.ok { background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); }
+  .msg.warn { background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.4); }
+  .msg.bad { background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.4); }
+  .wallets button { margin-top:8px; }
+  .timer { text-align:center; color:var(--muted); font-size:13px; margin-top:6px; }
+  .hidden { display:none !important; }
+  .foot { text-align:center; color:var(--muted); font-size:12px; margin-top:16px; }
+  [dir=ltr] .mono { text-align:left; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="title"></h1>
+  <div class="sub" id="sub"></div>
+
+  <div id="bad" class="msg bad"></div>
+
+  <div id="main">
+    <div class="amount"><b id="amount"></b><span id="net"></span></div>
+
+    <div class="row"><div class="label" id="lTo"></div><div class="mono"><code id="to"></code><button class="copy" data-copy="to"></button></div></div>
+    <div class="row"><div class="label" id="lFrom"></div><div class="mono"><code id="from"></code></div></div>
+    <div class="timer" id="timer"></div>
+
+    <div id="injected" class="hidden">
+      <div class="wallets" id="walletList"></div>
+      <button class="main" id="payBtn"></button>
+      <button class="alt hidden" id="switchAcc"></button>
+    </div>
+
+    <div id="noWallet" class="hidden">
+      <div class="msg warn show" id="noWalletMsg"></div>
+      <a class="alt" id="openMM" href="#">🦊 MetaMask</a>
+      <a class="alt" id="openTrust" href="#">🛡 Trust Wallet</a>
+    </div>
+
+    <div id="status" class="msg"></div>
+    <a class="alt hidden" id="back" href="#"></a>
+  </div>
+  <div class="foot">ASR · BNB Smart Chain (BEP20)</div>
+</div>
+
+<script>
+(() => {
+  const BSC = { chainId: '0x38', chainName: 'BNB Smart Chain', nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                rpcUrls: ['https://bsc-dataseed.binance.org/'], blockExplorerUrls: ['https://bscscan.com/'] };
+  const q = new URLSearchParams(location.search);
+  const P = {
+    order: q.get('o') || '', symbol: (q.get('s') || '').toUpperCase(), token: (q.get('c') || '').toLowerCase(),
+    to: (q.get('to') || '').toLowerCase(), from: (q.get('f') || '').toLowerCase(), amount: q.get('a') || '',
+    decimals: Number(q.get('d') || 18), expires: Number(q.get('e') || 0), bot: q.get('b') || '', lang: q.get('l') === 'en' ? 'en' : 'ar',
+  };
+
+  const T = {
+    ar: {
+      title: 'دفع الطلب', net: 'على شبكة BNB Smart Chain (BEP20)', to: 'إلى محفظة', from: 'لازم الدفع يكون من محفظتك المسجّلة',
+      copy: 'نسخ', copied: 'تم النسخ', pay: '💳 ادفع الآن', paying: '⏳ وافق على التحويل في المحفظة…',
+      choose: 'اختار المحفظة:', switchAcc: '🔄 تغيير الحساب في المحفظة',
+      wrongAcc: (a) => `⚠️ المحفظة المفتوحة دلوقتي (${a}) مش هي المسجّلة في الطلب. غيّر الحساب للمحفظة المسجّلة، وإلا الدفع مش هيتقبل.`,
+      switching: 'جاري تحويل المحفظة لشبكة BSC…', noBsc: 'لازم توافق على شبكة BNB Smart Chain في المحفظة عشان تكمل.',
+      lowBal: (b, s) => `⚠️ رصيدك ${b} ${s} أقل من المطلوب.`, rejected: 'اتلغى التحويل من المحفظة. تقدر تحاول تاني.',
+      sent: '✅ تم إرسال التحويل! البوت هيلقطه تلقائياً ويبعتلك الكوبون أول ما يتأكد على الشبكة (حوالي دقيقة).',
+      back: '↩️ ارجع للبوت', expired: '⌛️ مهلة الدفع لهذا الطلب انتهت. ارجع للبوت واعمل طلب جديد.',
+      left: (m) => `⏳ متبقي ${m}`, bad: 'الرابط ناقص أو غلط. ارجع للبوت واضغط زرار الدفع تاني.',
+      noWallet: 'مفيش محفظة في المتصفح ده. لو المحفظة على الموبايل، افتح الصفحة من جوه التطبيق:',
+      noWalletDesk: 'مفيش إضافة محفظة في المتصفح ده. ركّب MetaMask أو Trust Wallet extension، أو ارجع للبوت واستخدم QR من موبايلك.',
+      failed: 'حصل خطأ: ',
+    },
+    en: {
+      title: 'Order payment', net: 'on BNB Smart Chain (BEP20)', to: 'To wallet', from: 'Must be paid from your registered wallet',
+      copy: 'Copy', copied: 'Copied', pay: '💳 Pay now', paying: '⏳ Approve the transfer in your wallet…',
+      choose: 'Choose a wallet:', switchAcc: '🔄 Switch account in wallet',
+      wrongAcc: (a) => `⚠️ The connected wallet (${a}) is not the one registered on the order. Switch to the registered wallet or the payment will not be accepted.`,
+      switching: 'Switching your wallet to BSC…', noBsc: 'Please approve BNB Smart Chain in your wallet to continue.',
+      lowBal: (b, s) => `⚠️ Your balance ${b} ${s} is lower than required.`, rejected: 'The transfer was cancelled in the wallet. You can try again.',
+      sent: '✅ Transfer sent! The bot detects it automatically and sends your coupon once confirmed (about a minute).',
+      back: '↩️ Back to the bot', expired: '⌛️ The payment window for this order has ended. Go back to the bot and create a new order.',
+      left: (m) => `⏳ ${m} left`, bad: 'This link is incomplete. Go back to the bot and press the pay button again.',
+      noWallet: 'No wallet found in this browser. If your wallet is on this phone, open the page inside the app:',
+      noWalletDesk: 'No wallet extension in this browser. Install the MetaMask or Trust Wallet extension, or go back to the bot and use the QR with your phone.',
+      failed: 'Error: ',
+    },
+  }[P.lang];
+
+  document.documentElement.lang = P.lang;
+  document.documentElement.dir = P.lang === 'ar' ? 'rtl' : 'ltr';
+  const $ = (id) => document.getElementById(id);
+  const isAddr = (s) => /^0x[0-9a-f]{40}$/.test(s);
+  const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+  function show(el, kind, text) { el.className = `msg show ${kind}`; el.textContent = text; }
+
+  function fmtUnits(base, dec) {
+    const d = 10n ** BigInt(dec);
+    const whole = base / d;
+    const frac = (base % d).toString().padStart(dec, '0').slice(0, 6).replace(/0+$/, '');
+    return frac ? `${whole}.${frac}` : `${whole}`;
+  }
+
+  let amount;
+  try { amount = BigInt(P.amount); } catch { amount = 0n; }
+  if (!isAddr(P.token) || !isAddr(P.to) || !isAddr(P.from) || amount <= 0n || !P.symbol) {
+    $('main').classList.add('hidden');
+    $('title').textContent = 'ASR Pay';
+    show($('bad'), 'bad', T.bad);
+    return;
+  }
+
+  $('title').textContent = `${T.title} ${P.order}`;
+  $('amount').textContent = `${fmtUnits(amount, P.decimals)} ${P.symbol}`;
+  $('net').textContent = T.net;
+  $('lTo').textContent = T.to;
+  $('lFrom').textContent = T.from;
+  $('to').textContent = P.to;
+  $('from').textContent = P.from;
+  document.querySelectorAll('.copy').forEach((b) => {
+    b.textContent = T.copy;
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText($(b.dataset.copy).textContent); b.textContent = T.copied; setTimeout(() => (b.textContent = T.copy), 1500); } catch {}
+    };
+  });
+  const botUrl = /^[A-Za-z0-9_]{4,}$/.test(P.bot) ? `https://t.me/${P.bot}` : '';
+  if (botUrl) { $('back').href = botUrl; $('back').textContent = T.back; }
+
+  function expired() { return P.expires && Date.now() / 1000 > P.expires; }
+  function tick() {
+    if (!P.expires) return;
+    const s = Math.floor(P.expires - Date.now() / 1000);
+    if (s <= 0) {
+      $('timer').textContent = '';
+      $('payBtn').disabled = true;
+      show($('status'), 'bad', T.expired);
+      $('back').classList.toggle('hidden', !botUrl);
+      return;
+    }
+    $('timer').textContent = T.left(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+    setTimeout(tick, 1000);
+  }
+
+  // Wallet discovery: EIP-6963 lists every installed wallet; window.ethereum is the legacy fallback.
+  const providers = [];
+  window.addEventListener('eip6963:announceProvider', (e) => {
+    if (!providers.some((p) => p.info.uuid === e.detail.info.uuid)) providers.push(e.detail);
+  });
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+  let provider = null;
+  setTimeout(() => {
+    if (!providers.length && window.ethereum) providers.push({ info: { name: 'Wallet', uuid: 'legacy' }, provider: window.ethereum });
+    if (!providers.length) return noWallet();
+    $('injected').classList.remove('hidden');
+    $('payBtn').textContent = T.pay;
+    $('switchAcc').textContent = T.switchAcc;
+    if (providers.length === 1) {
+      provider = providers[0].provider;
+    } else {
+      const list = $('walletList');
+      const head = document.createElement('div');
+      head.className = 'label';
+      head.textContent = T.choose;
+      list.appendChild(head);
+      providers.forEach((p) => {
+        const b = document.createElement('button');
+        b.className = 'alt';
+        b.textContent = p.info.name;
+        b.onclick = () => {
+          provider = p.provider;
+          [...list.querySelectorAll('button')].forEach((x) => (x.style.borderColor = ''));
+          b.style.borderColor = '#9a5cff';
+          $('payBtn').disabled = false;
+        };
+        list.appendChild(b);
+      });
+      $('payBtn').disabled = true;
+    }
+    tick();
+  }, 400);
+
+  function noWallet() {
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    $('noWallet').classList.remove('hidden');
+    $('noWalletMsg').textContent = mobile ? T.noWallet : T.noWalletDesk;
+    const here = location.href.replace(/^https?:\/\//, '');
+    $('openMM').href = `https://metamask.app.link/dapp/${here}`;
+    $('openTrust').href = `https://link.trustwallet.com/open_url?coin_id=20000714&url=${encodeURIComponent(location.href)}`;
+    if (!mobile) { $('openMM').classList.add('hidden'); $('openTrust').classList.add('hidden'); }
+    $('back').classList.toggle('hidden', !botUrl);
+    tick();
+  }
+
+  async function ensureBsc() {
+    const id = await provider.request({ method: 'eth_chainId' });
+    if (String(id).toLowerCase() === BSC.chainId) return;
+    show($('status'), 'warn', T.switching);
+    try {
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BSC.chainId }] });
+    } catch (err) {
+      if (err && (err.code === 4902 || /Unrecognized chain/i.test(err.message || ''))) {
+        await provider.request({ method: 'wallet_addEthereumChain', params: [BSC] });
+      } else {
+        throw err;
+      }
+    }
+    const now = await provider.request({ method: 'eth_chainId' });
+    if (String(now).toLowerCase() !== BSC.chainId) throw new Error(T.noBsc);
+  }
+
+  const pad = (hex) => hex.replace(/^0x/, '').padStart(64, '0');
+
+  async function balanceOf(addr) {
+    const data = `0x70a08231${pad(addr)}`;
+    const res = await provider.request({ method: 'eth_call', params: [{ to: P.token, data }, 'latest'] });
+    return BigInt(res);
+  }
+
+  async function pay() {
+    if (!provider || expired()) return;
+    const btn = $('payBtn');
+    btn.disabled = true;
+    $('switchAcc').classList.add('hidden');
+    try {
+      const accounts = await provider.request({ method: 'eth_requestAccounts' });
+      const acc = String(accounts?.[0] || '').toLowerCase();
+      if (acc !== P.from) {
+        show($('status'), 'bad', T.wrongAcc(short(acc || '0x')));
+        $('switchAcc').classList.remove('hidden');
+        return;
+      }
+      await ensureBsc();
+      try {
+        const bal = await balanceOf(acc);
+        if (bal < amount) { show($('status'), 'warn', T.lowBal(fmtUnits(bal, P.decimals), P.symbol)); return; }
+      } catch {}
+      show($('status'), 'warn', T.paying);
+      const data = `0xa9059cbb${pad(P.to)}${pad(amount.toString(16))}`;
+      const hash = await provider.request({ method: 'eth_sendTransaction', params: [{ from: acc, to: P.token, data, value: '0x0' }] });
+      show($('status'), 'ok', T.sent);
+      const link = document.createElement('a');
+      link.href = `https://bscscan.com/tx/${hash}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'alt';
+      link.textContent = `BscScan: ${short(String(hash))}`;
+      $('status').after(link);
+      btn.classList.add('hidden');
+      $('back').classList.toggle('hidden', !botUrl);
+      return;
+    } catch (err) {
+      if (err && (err.code === 4001 || err.code === 'ACTION_REJECTED')) show($('status'), 'warn', T.rejected);
+      else show($('status'), 'bad', T.failed + (err?.message || err));
+    } finally {
+      if (!btn.classList.contains('hidden')) btn.disabled = expired();
+    }
+  }
+
+  $('payBtn').onclick = pay;
+  $('switchAcc').onclick = async () => {
+    try { await provider.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }); } catch {}
+    pay();
+  };
+})();
+</script>
+</body>
+</html>
